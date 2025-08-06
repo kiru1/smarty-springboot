@@ -39,11 +39,10 @@ public class OllamaChatService {
 
 		org.springframework.http.ResponseEntity<String> response = restTemplate.postForEntity(url, entity,
 				String.class);
-
+		System.out.println("error check:"+response);
 		try {
 			ObjectMapper mapper = new ObjectMapper();
 			JsonNode jsonNode = mapper.readTree(response.getBody());
-
 			return jsonNode.get("response").asText();
 		} catch (Exception e) {
 			return "Error parsing Ollama response.";
