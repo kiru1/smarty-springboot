@@ -5,29 +5,16 @@ import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.*;
 
 @Configuration
-@EnableWebSocket
-public class WebSocketConfig implements WebSocketConfigurer{
-	 private final ChatWebSocketHandler handler;
-
-	    public WebSocketConfig(ChatWebSocketHandler handler) {
-	        this.handler = handler;
-	    }
-	 @Override
-	    public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-	        registry.addHandler(handler, "/chat").setAllowedOrigins("*");
-	    }
-	/*@Override
-	public void configureMessageBroker(MessageBrokerRegistry config) {
-		config.enableSimpleBroker("/topic"); // Topic for broadcasts
-		config.setApplicationDestinationPrefixes("/app"); // Prefix for sending
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+	@Override
+	public void registerStompEndpoints(StompEndpointRegistry registry) {
+		registry.addEndpoint("/ws").setAllowedOriginPatterns("*");
 	}
 
 	@Override
-	public void registerStompEndpoints(StompEndpointRegistry registry) {
-		registry.addEndpoint("/chat").setAllowedOriginPatterns("*").withSockJS();
-		
-				
-	}*/
-
-	
+	public void configureMessageBroker(MessageBrokerRegistry registry) {
+		registry.enableSimpleBroker("/topic");
+		registry.setApplicationDestinationPrefixes("/app");
+	}
 }
