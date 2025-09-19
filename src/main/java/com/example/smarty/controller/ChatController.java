@@ -1,78 +1,84 @@
 package com.example.smarty.controller;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+import org.springframework.web.client.RequestCallback;
+import org.springframework.web.client.ResponseExtractor;
+import org.springframework.web.client.RestTemplate;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Controller
 public class ChatController {
 
-	private SimpMessagingTemplate messagingTemplate;
+    private final SimpMessagingTemplate messagingTemplate;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-	public ChatController(SimpMessagingTemplate messagingTemplate) {
+    public ChatController(SimpMessagingTemplate messagingTemplate) {
+        this.messagingTemplate = messagingTemplate;
+    }
 
-		this.messagingTemplate = messagingTemplate;
-	}
+    @MessageMapping("/chat")
+    public void handlePrompt(String prompt) {
+        // 1️⃣ Send user message immediately
+        messagingTemplate.convertAndSend("/topic/stream", Map.of("sender", "You", "text", prompt));
 
-	private final HttpClient httpClient = HttpClient.newHttpClient();
-	private final ObjectMapper objectMapper = new ObjectMapper();
+        // 2️⃣ Run the HTTP call and streaming asynchronously
+        CompletableFuture.runAsync(() -> streamFromRagServer(prompt));
+    }
 
-	@MessageMapping("/chat")
-	public void handlePrompt(String prompt) {
-		String url = "http://localhost:11434/api/generate";
+    private void streamFromRagServer(String prompt) {
+        String url = "http://localhost:8000/rag_query_stream";
 
-		// Send user message
-		try {
-			messagingTemplate.convertAndSend("/topic/stream", Map.of("sender", "You", "text", prompt));
-			 //messagingTemplate.convertAndSend("/topic/stream", Map.of("sender", "AI",
-			 //"text", ""));
+        try {
+            RestTemplate restTemplate = new RestTemplate(new SimpleClientHttpRequestFactory());
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            Map<String, String> body = Map.of("query", prompt);
 
-			// Build Ollama request
-			String requestBody = objectMapper
-					.writeValueAsString(Map.of("model", "tinyllama", "prompt", prompt, "stream", true));
+            // Stream response line by line
+            restTemplate.execute(url, org.springframework.http.HttpMethod.POST,
+                (RequestCallback) request -> {
+                    headers.forEach((key, value) -> request.getHeaders().put(key, value));
+                    objectMapper.writeValue(request.getBody(), body);
+                },
+                (ResponseExtractor<Void>) response -> {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.getBody()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            line = line.trim();
+                            if (line.isEmpty()) continue;
 
-			HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url))
-					.header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(requestBody))
-					.build();
-
-			// Stream response
-			httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofLines()).thenAccept(response -> {
-				response.body().forEach(line -> {
-					try {
-						if (line != null && !line.isBlank()) {
-							JsonNode node = objectMapper.readTree(line);
-							String token = node.get("response").asText();
-
-							messagingTemplate.convertAndSend("/topic/stream", Map.of("sender", "AI", "text", token));
-						}
-					} catch (Exception e) {
-						messagingTemplate.convertAndSend("/topic/stream",
-								Map.of("sender", "System", "text", "[error]"));
-					}
-				});
-			});
-
-		} catch (Exception e) {
-			messagingTemplate.convertAndSend("/topic/stream", Map.of("sender", "System", "text", "[internal error]"));
-		}
-	}
+                            try {
+                                JsonNode node = objectMapper.readTree(line);
+                                if (node.has("response")) {
+                                    String token = node.get("response").asText();
+                                    // Send each token asynchronously to WebSocket
+                                    messagingTemplate.convertAndSend("/topic/stream",
+                                            Map.of("sender", "AI", "text", token));
+                                }
+                            } catch (Exception e) {
+                                System.out.println("Skipping invalid JSON line: [" + line + "]");
+                            }
+                        }
+                    }
+                    return null;
+                });
+        } catch (Exception e) {
+            e.printStackTrace();
+            messagingTemplate.convertAndSend("/topic/stream",
+                    Map.of("sender", "System", "text", "[internal streaming error]"));
+        }
+    }
 }
-
-//server application
-
-/*
- * @MessageMapping("/send") // /app/send// clients send message to the server
- * 
- * @SendTo("/topic/messages")//server sends message back public ChatMessage
- * send(ChatMessage message) throws Exception{
- * System.out.println("message recieved from client" + message.getContent());
- * return new ChatMessage(message.getContent()); // Broadcasts to all clients }
- * }
- */
